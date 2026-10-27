@@ -10,14 +10,20 @@ A PAM module for automatically unlocking your KeePassXC database on login and sc
 
 ## Installation (Fedora / RPM)
 
-### Option 1: Build and Install the RPM
+### Option 1: Install from Fedora COPR (Recommended)
+```bash
+sudo dnf copr enable akey/pam-keepassxc
+sudo dnf install pam-keepassxc
+```
+
+### Option 2: Build and Install the RPM Locally
 ```bash
 ./rpm/build-rpm.sh
 sudo dnf install -y ./target/rpm/RPMS/x86_64/pam-keepassxc-*.x86_64.rpm
 ```
-*(Or download the pre-built `.rpm` from GitHub Releases / Actions artifacts.)*
+*(Or download the pre-built `.rpm` / `.deb` from GitHub Releases.)*
 
-### Option 2: Install & Configure PAM Automatically (KDE Plasma)
+### Option 3: Install & Configure PAM Automatically (KDE Plasma)
 After building (`cargo build --release`), run:
 ```bash
 sudo ./INSTALL.sh

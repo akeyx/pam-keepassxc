@@ -6,6 +6,13 @@ Release:        1%{?dist}
 Summary:        PAM module for auto-unlocking KeePassXC (including KDE & fingerprint support)
 License:        MPL-2.0 AND GPL-3.0-or-later
 URL:            https://github.com/akeyx/pam-keepassxc
+Source0:        %{name}-%{version}.tar.gz
+
+BuildRequires:  cargo
+BuildRequires:  rust
+BuildRequires:  pam-devel
+BuildRequires:  systemd-rpm-macros
+
 Requires:       pam
 Requires:       keepassxc
 
@@ -14,17 +21,21 @@ A PAM module that automatically unlocks your KeePassXC database over D-Bus on
 login and screen unlock, with support for KDE Plasma (plasmalogin / kscreenlocker)
 and biometric fingerprint unlocking via the Linux user kernel keyring (@u).
 
+%prep
+%autosetup -n %{name}-%{version}
+
+%build
+cargo build --release --locked
+
 %install
-install -Dm0755 "%{_sourcedir}/libpam_keepassxc.so" "%{buildroot}%{_libdir}/security/pam_keepassxc.so"
-install -Dm0644 "%{_sourcedir}/keepassxc.service" "%{buildroot}%{_userunitdir}/keepassxc.service"
+install -Dm0755 "target/release/libpam_keepassxc.so" "%{buildroot}%{_libdir}/security/pam_keepassxc.so"
+install -Dm0644 "systemd/keepassxc.service" "%{buildroot}%{_userunitdir}/keepassxc.service"
 ln -s "keepassxc.service" "%{buildroot}%{_userunitdir}/dbus-org.keepassxc.KeePassXC.MainWindow.service"
-install -Dm0644 "%{_sourcedir}/org.keepassxc.KeePassXC.MainWindow.service" "%{buildroot}%{_datadir}/dbus-1/services/org.keepassxc.KeePassXC.MainWindow.service"
-install -Dm0644 "%{_sourcedir}/README.md" "%{buildroot}%{_docdir}/%{name}/README.md"
-install -Dm0644 "%{_sourcedir}/LICENSE" "%{buildroot}%{_licensedir}/%{name}/LICENSE"
+install -Dm0644 "systemd/org.keepassxc.KeePassXC.MainWindow.service" "%{buildroot}%{_datadir}/dbus-1/services/org.keepassxc.KeePassXC.MainWindow.service"
 
 %files
-%license %{_licensedir}/%{name}/LICENSE
-%doc %{_docdir}/%{name}/README.md
+%license LICENSE
+%doc README.md
 %{_libdir}/security/pam_keepassxc.so
 %{_userunitdir}/keepassxc.service
 %{_userunitdir}/dbus-org.keepassxc.KeePassXC.MainWindow.service
