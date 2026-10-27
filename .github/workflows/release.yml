@@ -27,7 +27,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rpm-package
-          path: target/rpm/RPMS/*/*.rpm
+          path: target/rpm/RPMS/x86_64/*.rpm
           if-no-files-found: error
 
   build-deb:

@@ -4,27 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RPM_TOPDIR="$PROJECT_DIR/target/rpm"
+VERSION="0.2.0"
 
 cd "$PROJECT_DIR"
-
-echo "Building release binary..."
-cargo build --release --locked
 
 echo "Preparing rpmbuild tree..."
 rm -rf "$RPM_TOPDIR"
 mkdir -p "$RPM_TOPDIR"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
-cp "$PROJECT_DIR/target/release/libpam_keepassxc.so" "$RPM_TOPDIR/SOURCES/"
-cp "$PROJECT_DIR/systemd/keepassxc.service" "$RPM_TOPDIR/SOURCES/"
-cp "$PROJECT_DIR/systemd/org.keepassxc.KeePassXC.MainWindow.service" "$RPM_TOPDIR/SOURCES/"
-cp "$PROJECT_DIR/README.md" "$RPM_TOPDIR/SOURCES/"
-cp "$PROJECT_DIR/LICENSE" "$RPM_TOPDIR/SOURCES/"
+git archive --format=tar.gz --prefix="pam-keepassxc-${VERSION}/" HEAD \
+    > "$RPM_TOPDIR/SOURCES/pam-keepassxc-${VERSION}.tar.gz"
 cp "$SCRIPT_DIR/pam-keepassxc.spec" "$RPM_TOPDIR/SPECS/"
 
-echo "Building RPM package..."
-rpmbuild -bb \
+echo "Building SRPM and binary RPM packages..."
+rpmbuild -ba \
+    --nodeps \
     --define "_topdir $RPM_TOPDIR" \
     "$RPM_TOPDIR/SPECS/pam-keepassxc.spec"
 
-echo "RPM built successfully:"
-ls -lh "$RPM_TOPDIR"/RPMS/*/*.rpm
+echo "RPM packages built successfully:"
+ls -lh "$RPM_TOPDIR"/SRPMS/*.src.rpm "$RPM_TOPDIR"/RPMS/*/*.rpm
