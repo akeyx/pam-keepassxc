@@ -1,6 +1,6 @@
 [package]
 name = "pam-keepassxc"
-version = "0.2.0"
+version = "0.0.0-dev"
 license = "MPL-2.0 AND GPL-3.0"
 publish = false
 edition = "2021"

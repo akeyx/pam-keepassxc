@@ -8,20 +8,35 @@ permissions:
   contents: write
 
 jobs:
-  build-rpm:
-    name: Build Fedora RPM
+  build-rpm-and-copr:
+    name: Build Fedora RPM & Push to COPR
     runs-on: ubuntu-latest
     container:
       image: fedora:latest
     steps:
       - name: Install build dependencies
-        run: dnf install -y git cargo rust pam-devel rpm-build systemd-rpm-macros
+        run: dnf install -y git cargo rust pam-devel rpm-build systemd-rpm-macros copr-cli
 
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Build RPM package
-        run: ./rpm/build-rpm.sh
+      - name: Build RPM and SRPM packages
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          export RELEASE_VERSION="${RELEASE_VERSION#v}"
+          ./rpm/build-rpm.sh
+
+      - name: Push SRPM to Fedora COPR (akey/packages)
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        run: |
+          mkdir -p ~/.config
+          printf '%s\n' "$COPR_CONFIG" > ~/.config/copr
+          chmod 600 ~/.config/copr
+          copr-cli build packages target/rpm/SRPMS/*.src.rpm --nowait
 
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v7
@@ -36,12 +51,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y libpam0g-dev dpkg-dev
 
       - name: Build DEB package
-        run: ./deb/build-deb.sh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          export RELEASE_VERSION="${RELEASE_VERSION#v}"
+          ./deb/build-deb.sh
 
       - name: Upload DEB artifact
         uses: actions/upload-artifact@v7
@@ -52,7 +73,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-rpm, build-deb]
+    needs: [build-rpm-and-copr, build-deb]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -70,10 +91,13 @@ jobs:
           name: deb-package
           path: dist/
 
-      - name: Copy Arch PKGBUILD and Gentoo ebuild
+      - name: Flatten artifacts and copy PKGBUILD/ebuild
         run: |
+          find dist -mindepth 2 -type f -exec mv -t dist/ {} +
+          find dist -mindepth 1 -type d -delete
           cp aur/PKGBUILD dist/PKGBUILD
           cp gentoo/pam-keepassxc-9999.ebuild dist/pam-keepassxc-9999.ebuild
+          ls -la dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
