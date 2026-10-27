@@ -13,7 +13,7 @@ use rustbus::{
 };
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::config::{database_path, UserConfig};
+use crate::config::{database_path, keyfile_path, UserConfig};
 
 const KEEPASSXC_DBUS_NAME: &str = "org.keepassxc.KeePassXC.MainWindow";
 
@@ -37,7 +37,8 @@ pub fn try_unlock_once(user: &User, user_config: &UserConfig, pass: &SecretStrin
 	verify(&mut conn, pid)?;
 
 	let database_path = database_path(user, user_config);
-	unlock(&mut conn, &database_path, pass)?;
+	let keyfile_path = keyfile_path(user, user_config);
+	unlock(&mut conn, &database_path, pass, keyfile_path.as_deref())?;
 	Ok(())
 }
 
@@ -149,7 +150,12 @@ pub(crate) fn verify(conn: &mut RpcConn, pid: u32) -> Result<()> {
 	}
 }
 
-fn unlock(conn: &mut RpcConn, database: &str, pass: &SecretString) -> Result<()> {
+fn unlock(
+	conn: &mut RpcConn,
+	database: &str,
+	pass: &SecretString,
+	keyfile: Option<&str>,
+) -> Result<()> {
 	// Build a D-Bus message to request the unlocking of the KeePassXC database.
 	let mut call = MessageBuilder::new()
 		.call("openDatabase")
@@ -157,7 +163,11 @@ fn unlock(conn: &mut RpcConn, database: &str, pass: &SecretString) -> Result<()>
 		.on("/keepassxc")
 		.at(KEEPASSXC_DBUS_NAME)
 		.build();
-	call.body.push_param2(database, pass.expose_secret())?;
+	if let Some(kf) = keyfile {
+		call.body.push_param3(database, pass.expose_secret(), kf)?;
+	} else {
+		call.body.push_param2(database, pass.expose_secret())?;
+	}
 
 	let id = conn
 		.send_message(&mut call)?

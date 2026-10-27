@@ -1,49 +1,58 @@
 # pam-keepassxc
-A PAM module for auto-unlocking KeePassXC.
 
-## ⚠️ WARNING
-This is a prototype. There are no guarantees regarding security or compatibility with your setup.
+A PAM module for automatically unlocking your KeePassXC database on login and screen unlock over D-Bus, with native support for **KDE Plasma** (`plasmalogin` / `sddm` / `kscreenlocker`) and **biometric fingerprint unlocking** (`pam_fprintd.so`) via the volatile Linux user kernel keyring (`@u`).
 
-## Installation
+## Features
 
-1. Install the following components:
-   - Copy the `libpam_keepassxc.so` library to `/usr/lib/security/pam_keepassxc.so`.
-   - Install the `systemd/keepassxc.service` as a user systemd service.
-   - Install the `systemd/org.keepassxc.KeePassXC.MainWindow.service` as a D-Bus service file.
-   - Create a systemd service alias (symlink) from `keepassxc.service` to `dbus-org.keepassxc.KeePassXC.MainWindow.service`.
-   - Run the command:
-     ```bash
-     systemctl --user daemon-reload
-     ```
+- **Cold Login & Screen Unlock**: Unlocks your KeePassXC database automatically on initial desktop login (`plasmalogin`, `sddm`, `greetd`) and screen unlock (`/etc/pam.d/kde`, `swaylock`).
+- **Fingerprint Unlock Support**: Caches your password in the in-memory Linux user kernel keyring (`@u`) upon password login, allowing biometric screen unlock (`/etc/pam.d/kde-fingerprint`) to unlock KeePassXC without storing secrets on disk.
+- **Non-blocking PAM Execution**: Detaches cleanly via `_exit(0)` and `close_range` so GUI screen lockers (`kscreenlocker_greet`) dismiss instantaneously while KeePassXC finishes Argon2id decryption in the background.
 
-   See the [PKGBUILD](aur/PKGBUILD) for an example.
+## Installation (Fedora / RPM)
 
-2. Adjust your PAM configuration:
-   - Edit your `/etc/pam.d/swaylock` (or equivalent) file and add the following line as the last `auth` entry:
-     ```bash
-     auth optional pam_keepassxc.so
-     ```
+### Option 1: Build and Install the RPM
+```bash
+./rpm/build-rpm.sh
+sudo dnf install -y ./target/rpm/RPMS/x86_64/pam-keepassxc-*.x86_64.rpm
+```
+*(Or download the pre-built `.rpm` from GitHub Releases / Actions artifacts.)*
 
-   - For login managers such as `greetd`, also add the following line to your `/etc/pam.d/greetd`, right after every other `session` entry:
-     ```bash
-     session optional pam_keepassxc.so
-     ```
+### Option 2: Install & Configure PAM Automatically (KDE Plasma)
+After building (`cargo build --release`), run:
+```bash
+sudo ./INSTALL.sh
+```
+This installs `/usr/lib64/security/pam_keepassxc.so` and configures `/etc/pam.d/kde`, `/etc/pam.d/kde-fingerprint`, and `/etc/pam.d/plasmalogin` (saving backups to `/etc/pam.d/*.backup`).
 
-## Configuration
+## Manual PAM Configuration (KDE Plasma)
 
-Create a configuration file at `$HOME/.config/security/pam_keepassxc.toml` with the following content:
+1. **`/etc/pam.d/kde`** (Password screen unlock):
+   Add `-auth optional pam_keepassxc.so` after `auth substack password-auth`:
+   ```pam
+   auth        substack      password-auth
+   -auth       optional      pam_keepassxc.so
+   ```
+
+2. **`/etc/pam.d/kde-fingerprint`** (Fingerprint screen unlock):
+   Add `-auth optional pam_keepassxc.so` after `auth substack fingerprint-auth`:
+   ```pam
+   auth        substack      fingerprint-auth
+   -auth       optional      pam_keepassxc.so
+   ```
+
+3. **`/etc/pam.d/plasmalogin`** (or `/etc/pam.d/sddm`):
+   Add `-auth optional pam_keepassxc.so` at the end of the `auth` stack (before `postlogin`) and `-session optional pam_keepassxc.so` at the end of the `session` stack (before `postlogin`).
+
+## User Configuration
+
+Create `$HOME/.config/security/pam_keepassxc.toml`:
 ```toml
-database_path = "$HOME/<your database path>"
+database_path = "$HOME/.keepass/Passwords.kdbx"
+keyfile_path = "$HOME/.keepass/Passwords.keyx"  # optional
 ```
 
-Important: KeePassXC *must be* started as a systemd service. Make sure that you remove any other autostart configuration for KeePassXC. You don't need to enable the `keepassxc.service`, it will be started via D-Bus activation. If you wish to disable D-Bus activation for the `org.keepassxc.KeePassXC.MainWindow` D-Bus name, you can mask `dbus-org.keepassxc.KeePassXC.MainWindow.service`.
-
-## Contributing
-
-This is my first experience working with PAM, so I would appreciate any feedback on potential security issues and other improvements.
+Ensure KeePassXC has **Enable D-Bus integration** checked under **Tools → Settings → General → Basic Settings**, and that your database master password matches your Linux login password.
 
 ## License
 
-The source code in this repository is licensed under the [Mozilla Public License (MPL)](LICENSE). However, due to the inclusion of the GPLv3.0-licensed `pamsm` crate, any resulting compiled binaries are licensed under the GPLv3.0.
-
-If you distribute the compiled binaries, you must comply with the terms of the GPLv3.0.
+The source code in this repository is licensed under the [Mozilla Public License 2.0 (MPL-2.0)](LICENSE). Due to the inclusion of the GPLv3-licensed `pamsm` crate, compiled binaries are distributed under the terms of the GPLv3.0.

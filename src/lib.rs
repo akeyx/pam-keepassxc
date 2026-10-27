@@ -280,6 +280,7 @@ mod tests {
 		keyring::store_password(&user, &secret).expect("store_password should succeed");
 		let loaded = keyring::load_password().expect("load_password should succeed");
 		assert_eq!(loaded.expose_secret(), "test_pam_keepassxc_secret");
+		keyring::remove_test_key();
 	}
 
 	#[test]

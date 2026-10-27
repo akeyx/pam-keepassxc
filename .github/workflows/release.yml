@@ -1,0 +1,82 @@
+name: Release Packages
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-rpm:
+    name: Build Fedora RPM
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: dnf install -y git cargo rust pam-devel rpm-build systemd-rpm-macros
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build RPM package
+        run: ./rpm/build-rpm.sh
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpm-package
+          path: target/rpm/RPMS/*/*.rpm
+          if-no-files-found: error
+
+  build-deb:
+    name: Build Debian/Ubuntu DEB
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev dpkg-dev
+
+      - name: Build DEB package
+        run: ./deb/build-deb.sh
+
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: deb-package
+          path: target/deb/*.deb
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-rpm, build-deb]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download RPM artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: rpm-package
+          path: dist/
+
+      - name: Download DEB artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: deb-package
+          path: dist/
+
+      - name: Copy Arch PKGBUILD and Gentoo ebuild
+        run: |
+          cp aur/PKGBUILD dist/PKGBUILD
+          cp gentoo/pam-keepassxc-9999.ebuild dist/pam-keepassxc-9999.ebuild
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true

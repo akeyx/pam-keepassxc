@@ -1,28 +1,15 @@
-# Maintainer: Your Name <youremail@domain.com>
+# Maintainer: a.key <a.key@moronet.pl>
 pkgname=pam-keepassxc
-pkgver=1.0.0
+pkgver=0.2.0
 pkgrel=1
-epoch=
-pkgdesc="A PAM module for KeePassXC auto-unlocking."
+pkgdesc="A PAM module for KeePassXC auto-unlocking (including KDE & fingerprint support)."
 arch=('x86_64')
-url="https://github.com/m00nwtchr/pam-keepassxc"
-license=()
-groups=()
-depends=('pam')
-makedepends=('cargo-nightly')
-checkdepends=()
-optdepends=()
-provides=()
-conflicts=()
-replaces=()
-backup=()
-options=()
-install=
-changelog=
-source=("$pkgname"::'git+https://github.com/m00nwtchr/pam-keepassxc.git')
-noextract=()
+url="https://github.com/akeyx/pam-keepassxc"
+license=('MPL-2.0' 'GPL-3.0-or-later')
+depends=('pam' 'keepassxc')
+makedepends=('cargo' 'git')
+source=("$pkgname"::'git+https://github.com/akeyx/pam-keepassxc.git')
 sha256sums=('SKIP')
-validpgpkeys=()
 
 __TARGET="$(rustc -vV | sed -n 's/host: //p')"
 
@@ -33,25 +20,19 @@ prepare() {
 
 build() {
 	cd "$pkgname"
-
 	export CARGO_TARGET_DIR=target
-	cargo build \
-		-Z build-std=std,panic_abort \
-		-Z build-std-features=optimize_for_size,panic_immediate_abort \
-		--release \
-		--frozen --all-features --target "$__TARGET"
+	cargo build --release --frozen --all-features --target "$__TARGET"
 }
 
 check() {
 	cd "$pkgname"
-
-	cargo test --frozen --all-features
+	cargo test --frozen --all-features -- --skip test_dbus_verify_live
 }
 
 package() {
 	cd "$pkgname"
 
-	install -Dm0755 "target/$__TARGET/release/libpam_keepassxc.so" "$pkgdir/usr/lib/security/pam_keepassxc.so"	
+	install -Dm0755 "target/$__TARGET/release/libpam_keepassxc.so" "$pkgdir/usr/lib/security/pam_keepassxc.so"
 
 	install -Dm0644 -t "$pkgdir/usr/lib/systemd/user/" "systemd/keepassxc.service"
 	ln -s "keepassxc.service" "$pkgdir/usr/lib/systemd/user/dbus-org.keepassxc.KeePassXC.MainWindow.service"

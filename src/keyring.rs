@@ -8,15 +8,25 @@ use nix::{
 };
 use secrecy::{ExposeSecret, SecretString};
 
+const KEY_SPEC_PROCESS_KEYRING: c_long = -2;
 const KEY_SPEC_USER_KEYRING: c_long = -4;
+const KEYCTL_SETPERM: c_long = 5;
 const KEYCTL_SEARCH: c_long = 10;
 const KEYCTL_READ: c_long = 11;
+#[cfg(test)]
+const KEYCTL_UNLINK: c_long = 9;
+
+// Grant all permissions to possessor and user owner (KEY_POS_ALL | KEY_USR_ALL).
+const KEY_PERMS: c_long = 0x3f3f_0000;
 
 const KEY_TYPE: &CStr = c"user";
+#[cfg(not(test))]
 const KEY_DESC: &CStr = c"pam_keepassxc";
+#[cfg(test)]
+const KEY_DESC: &CStr = c"pam_keepassxc_test";
 
 fn add_key_current_user(secret: &str) -> Result<()> {
-	let ret = unsafe {
+	let key_id = unsafe {
 		syscall(
 			SYS_add_key,
 			KEY_TYPE.as_ptr(),
@@ -26,11 +36,23 @@ fn add_key_current_user(secret: &str) -> Result<()> {
 			KEY_SPEC_USER_KEYRING,
 		)
 	};
-	if ret < 0 {
+	if key_id < 0 {
 		return Err(anyhow!(
 			"add_key failed: {}",
 			std::io::Error::last_os_error()
 		));
+	}
+	unsafe {
+		// Link into process keyring so we hold possessor rights when setting permissions
+		let _ = syscall(
+			SYS_keyctl,
+			KEYCTL_SEARCH,
+			KEY_SPEC_USER_KEYRING,
+			KEY_TYPE.as_ptr(),
+			KEY_DESC.as_ptr(),
+			KEY_SPEC_PROCESS_KEYRING,
+		);
+		let _ = syscall(SYS_keyctl, KEYCTL_SETPERM, key_id, KEY_PERMS);
 	}
 	Ok(())
 }
@@ -63,7 +85,7 @@ pub fn load_password() -> Result<SecretString> {
 			KEY_SPEC_USER_KEYRING,
 			KEY_TYPE.as_ptr(),
 			KEY_DESC.as_ptr(),
-			0 as c_long,
+			KEY_SPEC_PROCESS_KEYRING,
 		)
 	};
 	if key_id < 0 {
@@ -112,4 +134,22 @@ pub fn load_password() -> Result<SecretString> {
 	})?;
 	buf.fill(0);
 	Ok(SecretString::from(s))
+}
+
+#[cfg(test)]
+pub fn remove_test_key() {
+	unsafe {
+		let key_id = syscall(
+			SYS_keyctl,
+			KEYCTL_SEARCH,
+			KEY_SPEC_USER_KEYRING,
+			KEY_TYPE.as_ptr(),
+			KEY_DESC.as_ptr(),
+			0 as c_long,
+		);
+		if key_id > 0 {
+			let _ = syscall(SYS_keyctl, KEYCTL_UNLINK, key_id, KEY_SPEC_USER_KEYRING);
+			let _ = syscall(SYS_keyctl, KEYCTL_UNLINK, key_id, KEY_SPEC_PROCESS_KEYRING);
+		}
+	}
 }
