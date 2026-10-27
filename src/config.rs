@@ -22,7 +22,7 @@ pub fn user_config(user: &User) -> Option<UserConfig> {
 }
 
 pub fn database_path(user: &User, config: &UserConfig) -> String {
-	let home_dir = user.dir.to_str().expect("");
+	let home_dir = user.dir.to_str().unwrap_or_default();
 
 	let mut result = config.database_path.replace("$HOME", home_dir);
 	if result.starts_with('~') {

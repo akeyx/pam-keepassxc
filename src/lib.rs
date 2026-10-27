@@ -1,16 +1,19 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use anyhow::{anyhow, Result};
-use log::{error, warn};
-use nix::unistd::User;
+use log::{error, info, warn};
+use nix::unistd::{ForkResult, User};
 use pamsm::{pam_module, Pam, PamData, PamError, PamFlags, PamLibExt, PamServiceModule};
 use secrecy::SecretString;
 
 mod config;
 mod dbus;
+mod keyring;
 
 use config::{user_config, UserConfig};
-use dbus::try_unlock;
+use dbus::{try_unlock, user_session_bus_path};
 
 const MODULE_NAME: &str = "pam_keepassxc";
 
@@ -19,11 +22,10 @@ struct PamKeePassXC;
 /**
  * Perform a double fork to detach the process and avoid zombie processes.
 **/
-#[cfg(feature = "session")]
-fn double_fork() -> Result<nix::unistd::ForkResult> {
+fn double_fork() -> Result<ForkResult> {
 	use nix::{
 		sys::wait::waitpid,
-		unistd::{close, fork, setsid, ForkResult},
+		unistd::{close, fork, setsid},
 	};
 	match unsafe { fork() } {
 		Ok(ForkResult::Parent { child, .. }) => {
@@ -37,19 +39,26 @@ fn double_fork() -> Result<nix::unistd::ForkResult> {
 			let _ = close(0);
 			let _ = close(1);
 			let _ = close(2);
+			unsafe {
+				let _ = nix::libc::syscall(nix::libc::SYS_close_range, 3usize, usize::MAX, 0usize);
+			}
 
 			// Fork again to create the grandchild process.
 			match unsafe { fork() } {
 				Ok(ForkResult::Child) => Ok(ForkResult::Child),
-				_ => std::process::exit(0),
+				_ => unsafe { nix::libc::_exit(0) },
 			}
 		}
-		Err(err) => Err(anyhow!("{}", err)),
+		Err(err) => Err(anyhow!("{err}")),
 	}
 }
 
-#[cfg(feature = "session")]
-fn grandchild(user: &User, user_config: &UserConfig, pass: &SecretString) -> Result<()> {
+fn grandchild(
+	wait_for_session: bool,
+	user: &User,
+	user_config: &UserConfig,
+	pass_opt: Option<&SecretString>,
+) -> Result<()> {
 	use nix::unistd::{getgid, getuid, setgid, setresgid, setresuid, setuid};
 
 	let _ = init_syslog(); // Reinitialize syslog for new PID
@@ -60,13 +69,46 @@ fn grandchild(user: &User, user_config: &UserConfig, pass: &SecretString) -> Res
 	let _ = setresgid(user.gid, user.gid, user.gid);
 	let _ = setresuid(user.uid, user.uid, user.uid);
 
-	try_unlock(false, user, user_config, pass)?;
+	let pass = if let Some(p) = pass_opt {
+		if let Err(err) = keyring::store_password(user, p) {
+			warn!("Failed to store password in user keyring: {err}");
+		}
+		p.clone()
+	} else {
+		keyring::load_password()?
+	};
+
+	try_unlock(wait_for_session, user, user_config, &pass)?;
+	info!("Successfully unlocked KeePassXC database.");
 	Ok(())
+}
+
+fn spawn_unlock_worker(
+	wait_for_session: bool,
+	user: &User,
+	user_config: &UserConfig,
+	pass_opt: Option<&SecretString>,
+) {
+	match double_fork() {
+		Ok(ForkResult::Parent { child, .. }) => {
+			info!("Spawned unlock worker (intermediate PID: {child})");
+		}
+		Ok(ForkResult::Child) => {
+			if let Err(err) = grandchild(wait_for_session, user, user_config, pass_opt) {
+				error!("KeePassXC unlock worker failed: {err}");
+			}
+			unsafe { nix::libc::_exit(0) };
+		}
+		Err(err) => {
+			error!("Failed to fork unlock worker: {err}");
+		}
+	}
 }
 
 #[derive(Clone)]
 struct SessionData {
 	pass: Option<SecretString>, // Secret wrapper ensures data is zeroed on drop.
+	unlocked_in_setcred: bool,
 }
 
 impl PamData for SessionData {}
@@ -83,104 +125,176 @@ fn init_syslog() -> Result<()> {
 	};
 
 	let logger = syslog::unix(formatter)?;
-	log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
-		.map(|()| log::set_max_level(LevelFilter::Info))?;
+	let _ = log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+		.map(|()| log::set_max_level(LevelFilter::Info));
 
 	Ok(())
 }
 
+fn resolve_user(pamh: &Pam) -> Result<User, PamError> {
+	match pamh.get_user(None) {
+		Ok(Some(u)) => {
+			let Ok(name) = u.to_str() else {
+				return Err(PamError::USER_UNKNOWN);
+			};
+			match User::from_name(name) {
+				Ok(Some(u)) => Ok(u),
+				_ => Err(PamError::USER_UNKNOWN),
+			}
+		}
+		Ok(None) => Err(PamError::USER_UNKNOWN),
+		Err(e) => Err(e),
+	}
+}
+
 impl PamServiceModule for PamKeePassXC {
+	fn authenticate(pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
+		catch_unwind(AssertUnwindSafe(|| {
+			let _ = init_syslog();
+
+			let pass = match pamh.get_cached_authtok() {
+				Ok(Some(p)) => p.to_str().ok().map(SecretString::from),
+				Ok(None) | Err(_) => None,
+			};
+
+			let _ = unsafe {
+				pamh.send_data(
+					MODULE_NAME,
+					SessionData {
+						pass,
+						unlocked_in_setcred: false,
+					},
+				)
+			};
+
+			PamError::SUCCESS
+		}))
+		.unwrap_or(PamError::IGNORE)
+	}
+
+	fn setcred(pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
+		catch_unwind(AssertUnwindSafe(|| {
+			let _ = init_syslog();
+			let user = match resolve_user(&pamh) {
+				Ok(u) => u,
+				Err(e) => return e,
+			};
+
+			let Some(user_config) = user_config(&user) else {
+				return PamError::IGNORE;
+			};
+
+			let data: SessionData =
+				unsafe { pamh.retrieve_data(MODULE_NAME) }.unwrap_or(SessionData {
+					pass: None,
+					unlocked_in_setcred: false,
+				});
+
+			if let Some(ref pass) = data.pass {
+				if let Err(err) = keyring::store_password(&user, pass) {
+					warn!("Unable to store password in user keyring during setcred: {err}");
+				}
+			}
+
+			if user_session_bus_path(&user).exists() {
+				let _ = unsafe {
+					pamh.send_data(
+						MODULE_NAME,
+						SessionData {
+							pass: None,
+							unlocked_in_setcred: true,
+						},
+					)
+				};
+				spawn_unlock_worker(false, &user, &user_config, data.pass.as_ref());
+			}
+
+			PamError::SUCCESS
+		}))
+		.unwrap_or(PamError::IGNORE)
+	}
+
 	#[cfg(feature = "session")]
 	fn open_session(pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
-		use nix::unistd::ForkResult;
+		catch_unwind(AssertUnwindSafe(|| {
+			let _ = init_syslog();
+			let data: SessionData =
+				unsafe { pamh.retrieve_data(MODULE_NAME) }.unwrap_or(SessionData {
+					pass: None,
+					unlocked_in_setcred: false,
+				});
+			let _ = unsafe {
+				pamh.send_data(
+					MODULE_NAME,
+					SessionData {
+						pass: None,
+						unlocked_in_setcred: true,
+					},
+				)
+			};
 
-		let _ = init_syslog();
-		let data: SessionData = match unsafe { pamh.retrieve_data(MODULE_NAME) } {
-			Err(e) => return e,
-			Ok(data) => data,
-		};
-		let _ = unsafe { pamh.send_data(MODULE_NAME, SessionData { pass: None }) }; // Clear saved data
-
-		let Some(pass) = data.pass else {
-			return PamError::SESSION_ERR;
-		};
-
-		warn!("Trying to unlock keepassxc on session open...",);
-		let user = match pamh.get_user(None) {
-			Ok(Some(u)) => match User::from_name(u.to_str().expect("")) {
-				Ok(Some(u)) => u,
-				_ => return PamError::USER_UNKNOWN,
-			},
-			Ok(None) => return PamError::USER_UNKNOWN,
-			Err(e) => return e,
-		};
-
-		let Some(user_config) = user_config(&user) else {
-			return PamError::IGNORE;
-		};
-
-		match double_fork() {
-			Ok(ForkResult::Parent { child, .. }) => {
-				warn!("Forked with PID: {child}");
+			if data.unlocked_in_setcred {
+				return PamError::SUCCESS;
 			}
-			Ok(ForkResult::Child) => {
-				// Grandchild process that waits for the D-Bus service to be ready.
-				let _ = grandchild(&user, &user_config, &pass);
-				std::process::exit(0)
-			}
-			Err(_) => {}
-		}
 
-		PamError::SUCCESS
+			let user = match resolve_user(&pamh) {
+				Ok(u) => u,
+				Err(e) => return e,
+			};
+
+			let Some(user_config) = user_config(&user) else {
+				return PamError::IGNORE;
+			};
+
+			info!("Trying to unlock keepassxc on session open...");
+			spawn_unlock_worker(true, &user, &user_config, data.pass.as_ref());
+
+			PamError::SUCCESS
+		}))
+		.unwrap_or(PamError::IGNORE)
+	}
+
+	#[cfg(not(feature = "session"))]
+	fn open_session(_pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
+		PamError::IGNORE
 	}
 
 	fn close_session(_pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
 		PamError::IGNORE
 	}
-
-	fn authenticate(pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
-		let _ = init_syslog();
-		let user = match pamh.get_user(None) {
-			Ok(Some(u)) => match User::from_name(u.to_str().expect("")) {
-				Ok(Some(u)) => u,
-				_ => return PamError::USER_UNKNOWN,
-			},
-			Ok(None) => return PamError::USER_UNKNOWN,
-			Err(e) => return e,
-		};
-
-		let pass = match pamh.get_authtok(None) {
-			Ok(Some(p)) => SecretString::from(p.to_str().expect("")),
-			Ok(None) => return PamError::AUTH_ERR,
-			Err(e) => return e,
-		};
-
-		let Some(user_config) = user_config(&user) else {
-			return PamError::IGNORE;
-		};
-
-		if let Err(err) = try_unlock(true, &user, &user_config, &pass) {
-			error!("{}", err);
-			#[cfg(feature = "session")]
-			{
-				warn!("Unable to unlock keepass on auth, sending password to session");
-
-				if let Err(e) =
-					unsafe { pamh.send_data(MODULE_NAME, SessionData { pass: Some(pass) }) }
-				{
-					return e;
-				}
-			}
-			return PamError::AUTH_ERR;
-		}
-
-		PamError::SUCCESS
-	}
-
-	#[cfg(not(feature = "session"))]
-	fn open_session(_pamh: Pam, _flags: PamFlags, _args: Vec<String>) -> PamError {
-		return PamError::IGNORE;
-	}
 }
 
 pam_module!(PamKeePassXC);
+
+#[cfg(test)]
+mod tests {
+	use nix::unistd::geteuid;
+	use secrecy::ExposeSecret;
+
+	use super::*;
+
+	#[test]
+	fn test_keyring_roundtrip() {
+		let user = User::from_uid(geteuid()).unwrap().unwrap();
+		let secret = SecretString::from("test_pam_keepassxc_secret".to_string());
+		keyring::store_password(&user, &secret).expect("store_password should succeed");
+		let loaded = keyring::load_password().expect("load_password should succeed");
+		assert_eq!(loaded.expose_secret(), "test_pam_keepassxc_secret");
+	}
+
+	#[test]
+	fn test_dbus_verify_live() {
+		let user = User::from_uid(geteuid()).unwrap().unwrap();
+		if !dbus::user_session_bus_path(&user).exists() {
+			return;
+		}
+		let mut conn = rustbus::RpcConn::connect_to_path(
+			dbus::user_session_bus(&user).unwrap(),
+			rustbus::connection::Timeout::Duration(std::time::Duration::from_secs(5)),
+		)
+		.unwrap();
+		if let Ok(pid) = dbus::get_pid(&mut conn) {
+			dbus::verify(&mut conn, pid).expect("verify should succeed on running KeePassXC");
+		}
+	}
+}
