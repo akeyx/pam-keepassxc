@@ -3,11 +3,21 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$PROJECT_DIR/Cargo.toml" | head -n1)"
+
+cd "$PROJECT_DIR"
+
+VERSION="${RELEASE_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")}"
 PKG_NAME="pam-keepassxc_${VERSION}-1_amd64"
 DEB_ROOT="$PROJECT_DIR/target/deb/$PKG_NAME"
 
-cd "$PROJECT_DIR"
+restore_files() {
+    git checkout -- Cargo.toml Cargo.lock 2>/dev/null || true
+}
+trap restore_files EXIT
+
+echo "Stamping version ${VERSION} into Cargo.toml and Cargo.lock..."
+sed -i "0,/^version = .*/s//version = \"${VERSION}\"/" Cargo.toml
+sed -i "/^name = \"pam-keepassxc\"$/{n;s/^version = .*/version = \"${VERSION}\"/;}" Cargo.lock
 
 echo "Building release binary..."
 cargo build --release --locked
