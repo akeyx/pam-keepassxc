@@ -12,7 +12,7 @@ A PAM module for automatically unlocking your KeePassXC database on login and sc
 
 ### Option 1: Install from Fedora COPR (Recommended)
 ```bash
-sudo dnf copr enable akey/pam-keepassxc
+sudo dnf copr enable akey/packages
 sudo dnf install pam-keepassxc
 ```
 
