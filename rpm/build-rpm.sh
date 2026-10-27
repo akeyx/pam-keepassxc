@@ -4,17 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RPM_TOPDIR="$PROJECT_DIR/target/rpm"
-VERSION="0.2.0"
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$PROJECT_DIR/Cargo.toml" | head -n1)"
 
 cd "$PROJECT_DIR"
 
-echo "Preparing rpmbuild tree..."
+echo "Preparing rpmbuild tree for version ${VERSION}..."
 rm -rf "$RPM_TOPDIR"
 mkdir -p "$RPM_TOPDIR"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
 git archive --format=tar.gz --prefix="pam-keepassxc-${VERSION}/" HEAD \
     > "$RPM_TOPDIR/SOURCES/pam-keepassxc-${VERSION}.tar.gz"
-cp "$SCRIPT_DIR/pam-keepassxc.spec" "$RPM_TOPDIR/SPECS/"
+sed "s/^Version:.*/Version:        ${VERSION}/" "$SCRIPT_DIR/pam-keepassxc.spec" \
+    > "$RPM_TOPDIR/SPECS/pam-keepassxc.spec"
 
 echo "Building SRPM and binary RPM packages..."
 rpmbuild -ba \
