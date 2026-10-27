@@ -4,6 +4,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
 
 jobs:
   check-and-test:
@@ -27,3 +29,13 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+  security-audit:
+    name: Security & Dependency Audit (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Run cargo-deny (advisories, licenses, bans, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
