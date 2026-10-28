@@ -1,0 +1,10 @@
+module pam_keepassxc 1.0;
+
+require {
+	type xdm_t;
+	type systemd_unit_file_t;
+	class service status;
+}
+
+#============= xdm_t ==============
+allow xdm_t systemd_unit_file_t:service status;

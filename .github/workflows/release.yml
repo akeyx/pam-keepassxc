@@ -15,7 +15,7 @@ jobs:
       image: fedora:latest
     steps:
       - name: Install build dependencies
-        run: dnf install -y git cargo rust pam-devel rpm-build systemd-rpm-macros copr-cli
+        run: dnf install -y git cargo rust pam-devel rpm-build systemd-rpm-macros copr-cli checkpolicy policycoreutils
 
       - name: Checkout repository
         uses: actions/checkout@v7

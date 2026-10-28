@@ -94,6 +94,18 @@ session     include       password-auth
 session     include       postlogin
 EOF
 
+echo "5. Installing SELinux policy module for Plasma Login Manager (xdm_t)..."
+if command -v checkmodule >/dev/null 2>&1 && command -v semodule_package >/dev/null 2>&1 && command -v semodule >/dev/null 2>&1; then
+    TMP_SELINUX_DIR=$(mktemp -d)
+    checkmodule -M -m -o "$TMP_SELINUX_DIR/pam_keepassxc.mod" "$SCRIPT_DIR/selinux/pam_keepassxc.te"
+    semodule_package -o "$TMP_SELINUX_DIR/pam_keepassxc.pp" -m "$TMP_SELINUX_DIR/pam_keepassxc.mod"
+    semodule -i "$TMP_SELINUX_DIR/pam_keepassxc.pp"
+    rm -rf "$TMP_SELINUX_DIR"
+    echo "SELinux policy module installed."
+else
+    echo "Warning: checkmodule/semodule not found; skipping SELinux policy module installation."
+fi
+
 restorecon -v "$PAM_INSTALL_DIR/pam_keepassxc.so" /etc/pam.d/kde /etc/pam.d/kde-fingerprint /etc/pam.d/plasmalogin
 
 echo "Done! Backups saved to /etc/pam.d/*.backup"
