@@ -19,9 +19,7 @@ const MODULE_NAME: &str = "pam_keepassxc";
 
 struct PamKeePassXC;
 
-/**
- * Perform a double fork to detach the process and avoid zombie processes.
-**/
+/// Perform a double fork to detach the process and avoid zombie processes.
 fn double_fork() -> Result<ForkResult> {
 	use nix::{
 		sys::wait::waitpid,
